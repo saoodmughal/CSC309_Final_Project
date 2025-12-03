@@ -7,8 +7,7 @@
     "createsuperuser": "node prisma/createsu.js",
     "seed": "node prisma/seed.js",
     "clean": "rm -rf prisma/dev.db* node_modules package-lock.json prisma/migrations/",
-    "start": "node server.js",
-    "postinstall": "npm install --omit=dev"
+    "start": "node server.js"
   },
   "author": "CSC309 Student, Winter 2025",
   "license": "ISC",

@@ -8,7 +8,7 @@
     "clean": "rm -rf prisma/dev.db* node_modules package-lock.json prisma/migrations/",
     "start": "node index.js",
     "seed": "node prisma/seed.js",
-    "postinstall": "npx prisma migrate dev && npm run seed"
+    "postinstall": "npx prisma migrate deploy && npm run seed"
   },
   "author": "CSC309 Student, Winter 2025",
   "license": "ISC",

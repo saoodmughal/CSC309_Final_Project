@@ -5,6 +5,7 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+  seed = "node prisma/seed.js"
 }
 
 enum RoleType {

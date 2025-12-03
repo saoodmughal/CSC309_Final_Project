@@ -5,6 +5,11 @@ const router = express.Router();
 // Node 18+ has global fetch. For Node <=17, uncomment:
 // const fetch = (...args) => import("node-fetch").then(({ default: f }) => f(...args));
 
+/** === IMPORTANT: point the AI service to your real backend base ===
+ * If you move environments, just set process.env.API_BASE instead.
+ */
+const API_BASE = process.env.API_BASE || "https://backend-production-09c4.up.railway.app";
+
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const INCLUDE_ROLE_PREFIX = process.env.AI_INCLUDE_ROLE === "1";
@@ -19,10 +24,6 @@ const AI_CTX_LIMIT = parseInt(process.env.AI_CTX_LIMIT || "200", 10); // list ca
 
 // userId -> { bootstrapped, lastBootstrap, history[], me, events[], txns[], dataBlock }
 const sessions = new Map();
-
-function getBase(req) {
-  return `${req.protocol}://${req.get("host")}`;
-}
 
 const SYSTEM_PROMPT = `You are Prestige Assistant for a points & events program.
 - Be concise (2–5 sentences).
@@ -139,10 +140,7 @@ async function synthesizeReply(text) {
         "Content-Type": "application/json",
         Accept: "audio/mpeg",
       },
-      body: JSON.stringify({
-        text,
-        model_id: ELEVEN_MODEL,
-      }),
+      body: JSON.stringify({ text, model_id: ELEVEN_MODEL }),
     });
     if (!resp.ok) return null;
     const buffer = Buffer.from(await resp.arrayBuffer());
@@ -154,14 +152,18 @@ async function synthesizeReply(text) {
 }
 
 // ----------------------------
-// Data fetchers (best-effort, “give me everything”)
+// Data fetchers (use absolute API_BASE)
 // ----------------------------
 async function fetchMe(req) {
-  const resp = await fetch(`${getBase(req)}/users/me`, {
-    headers: { "Content-Type": "application/json", Authorization: req.headers.authorization || "" }
-  });
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(`${API_BASE}/users/me`, {
+      headers: { "Content-Type": "application/json", Authorization: req.headers.authorization || "" }
+    });
+    if (!resp.ok) return null;
+    return resp.json();
+  } catch {
+    return null;
+  }
 }
 
 function isMe(idOrVal, me) {
@@ -180,7 +182,6 @@ function normalizeEvent(ev, me) {
     ev.numGuests ??
     (Array.isArray(guests) ? guests.length : undefined);
 
-  // Heuristic: am I RSVP'd?
   const meRsvped =
     !!(ev.meRsvped ?? ev.rsvped ?? ev.isRsvped ?? ev.registered) ||
     guests.some(g => isMe(g?.id ?? g?.userId ?? g?.utorid ?? g?.email, me));
@@ -214,18 +215,17 @@ async function fetchAllEvents(req, me) {
   const limit = 100;
   let page = 1;
 
-  // We’ll try includeMe/showFull (if your server supports); otherwise server just ignores.
   for (let i = 0; i < 10; i++) {
     const params = new URLSearchParams({
       page: String(page),
       limit: String(limit),
       showFull: "true",
-      includeMe: "true",          // non-spec, safe to ignore if unsupported
-      includeGuests: "true",      // non-spec, safe to ignore if unsupported
-      includeOrganizers: "true",  // non-spec, safe to ignore if unsupported
+      includeMe: "true",
+      includeGuests: "true",
+      includeOrganizers: "true",
     });
 
-    const resp = await fetch(`${getBase(req)}/events?${params.toString()}`, {
+    const resp = await fetch(`${API_BASE}/events?${params.toString()}`, {
       headers: { "Content-Type": "application/json", Authorization: req.headers.authorization || "" }
     });
     if (!resp.ok) break;
@@ -245,7 +245,7 @@ async function fetchAllEvents(req, me) {
 
 async function fetchTransactions(req) {
   try {
-    const resp = await fetch(`${getBase(req)}/transactions?page=1&limit=200`, {
+    const resp = await fetch(`${API_BASE}/transactions?page=1&limit=200`, {
       headers: { "Content-Type": "application/json", Authorization: req.headers.authorization || "" }
     });
     if (!resp.ok) return [];
@@ -344,7 +344,6 @@ function buildDataBlock({ me, events, txns }) {
     })),
   };
 
-  // Keep it as a plain text block so Gemini can skim + reason
   return "DATA_SNAPSHOT:\n" + JSON.stringify(payload, null, 2);
 }
 
@@ -362,8 +361,8 @@ async function bootstrapSession(req, userId) {
 // Routes
 // ----------------------------
 router.get("/ping", (req, res) => {
-  const me = req.auth || null; // express-jwt v8
-  return res.json({ ok: true, model: GEMINI_MODEL, role: me?.role ?? null });
+  const me = req.auth || null; // express-jwt v8 (if present)
+  return res.json({ ok: true, model: GEMINI_MODEL, role: me?.role ?? null, apiBase: API_BASE });
 });
 
 router.post("/chat", async (req, res) => {
@@ -374,7 +373,7 @@ router.post("/chat", async (req, res) => {
     const userMessage = raw.trim().slice(0, 2000);
     if (!userMessage) return res.status(400).json({ reply: "message is required" });
 
-    // user id / role from JWT
+    // user id / role from JWT (if using express-jwt). Fallback: decode Bearer.
     const meJwt = req.auth || {};
     const role = meJwt.role || "regular";
     const userId =
@@ -463,7 +462,7 @@ router.post("/chat", async (req, res) => {
     // ---- General Q/A with full data block up front + short history ----
     const contents = [];
     if (sess.dataBlock) {
-      contents.push({ role: "user", parts: [{ text: sess.dataBlock }] }); // give Gemini everything we know
+      contents.push({ role: "user", parts: [{ text: sess.dataBlock }] });
     }
     if (Array.isArray(sess.history) && sess.history.length) contents.push(...sess.history);
     contents.push({ role: "user", parts: [{ text: userMessage }] });
